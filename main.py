@@ -14,7 +14,6 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 # --- 1. НАСТРОЙКИ ---
 API_TOKEN = '8727948676:AAHeJCwjjgQE6GQjtQwLfbT68B38K8xKrIc'
-
 ADMIN_PASSWORD = "мойпароль"   
 VIEWER_PASSWORD = "отчет"  
 
@@ -31,14 +30,16 @@ class AuthStates(StatesGroup):
     waiting_for_password = State()
 
 class BotStates(StatesGroup):
-    adding_prod_name = State(); adding_prod_cat = State(); deleting_prod = State()
-    moving_machine = State(); moving_cat = State(); moving_prod = State(); moving_qty = State()
-    inv_machine = State(); inv_cat = State(); inv_prod = State(); inv_qty = State()
-    report_choosing_machine = State(); report_choosing_month = State()
+    adding_prod_name = State()
+    adding_prod_cat = State()
+    deleting_prod = State()
+    moving_qty = State()
+    inv_qty = State()
 
 class StaffStates(StatesGroup):
-    adding_staff_name = State(); adding_staff_cat = State()
-    consuming_cat = State(); consuming_prod = State(); consuming_type = State(); consuming_qty = State()
+    adding_staff_name = State()
+    adding_staff_cat = State()
+    consuming_qty = State()
 
 # --- 3. БАЗА ДАННЫХ ---
 def init_db():
@@ -58,7 +59,7 @@ def get_user_role(user_id):
         res = conn.execute('SELECT role FROM authorized_users WHERE user_id = ?', (user_id,)).fetchone()
     return res[0] if res else None
 
-# --- 4. ВСПОМОГАТЕЛЬНЫЕ КЛАВИАТУРЫ ---
+# --- 4. КЛАВИАТУРЫ ---
 def ikb_main(role):
     kb = []
     if role == "admin":
@@ -69,7 +70,7 @@ def ikb_main(role):
     else:
         kb.append([InlineKeyboardButton(text="🍽 Отчёт по цеховому", callback_data="staff_rep_months")])
     
-    kb.append([InlineKeyboardButton(text="📊 Отчеты", callback_data="menu_rep_root")])
+    kb.append([InlineKeyboardButton(text="📊 Отчеты по аппаратам", callback_data="menu_rep_root")])
     kb.append([InlineKeyboardButton(text="📈 ПОДРОБНЫЙ ОТЧЕТ", callback_data="menu_det_rep")])
     kb.append([InlineKeyboardButton(text="🚪 Выйти", callback_data="logout")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
@@ -139,7 +140,6 @@ async def move_select_cat(call: CallbackQuery, state: FSMContext):
     await state.update_data(m_id=m_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=c, callback_data=f"mcat_{i}")] for i, c in enumerate(CATEGORIES)] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]])
     await call.message.edit_text(f"🤖 Аппарат {m_id}\nВыберите категорию:", reply_markup=kb)
-    await call.answer()
 
 @dp.callback_query(F.data.startswith("mcat_"))
 async def move_select_prod(call: CallbackQuery, state: FSMContext):
@@ -148,18 +148,16 @@ async def move_select_prod(call: CallbackQuery, state: FSMContext):
     await state.update_data(cat_name=cat_name, cat_idx=cat_idx)
     with sqlite3.connect('vending.db') as conn:
         prods = conn.execute('SELECT name FROM products WHERE category = ?', (cat_name,)).fetchall()
-    if not prods: return await call.answer("Нет товаров!", show_alert=True)
+    if not prods: return await call.answer("Нет товаров в этой категории!", show_alert=True)
     kb = [[InlineKeyboardButton(text=p[0], callback_data=f"mprod_{p[0]}")] for p in prods]
     kb.append([InlineKeyboardButton(text="📁 Другая категория", callback_data=f"movemac_{(await state.get_data())['m_id']}")])
     await call.message.edit_text(f"📦 {cat_name}:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-    await call.answer()
 
 @dp.callback_query(F.data.startswith("mprod_"))
 async def move_get_qty(call: CallbackQuery, state: FSMContext):
     await state.update_data(p_name=call.data.replace("mprod_", ""))
     await call.message.edit_text(f"🔢 Введите количество для **{call.data.replace('mprod_', '')}**:", parse_mode="Markdown")
     await state.set_state(BotStates.moving_qty)
-    await call.answer()
 
 @dp.message(BotStates.moving_qty)
 async def move_finish(msg: types.Message, state: FSMContext):
@@ -168,10 +166,8 @@ async def move_finish(msg: types.Message, state: FSMContext):
     with sqlite3.connect('vending.db') as conn:
         conn.execute('INSERT INTO movements (machine_id, item_name, quantity, date) VALUES (?,?,?,?)',
                      (data['m_id'], data['p_name'], int(msg.text), datetime.now().strftime("%Y-%m-%d")))
-    await bot.delete_message(msg.chat.id, msg.message_id - 1)
-    await msg.delete()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Добавить ещё товар сюда", callback_data=f"mcat_{data['cat_idx']}")],
+        [InlineKeyboardButton(text="➕ Ещё товар сюда", callback_data=f"mcat_{data['cat_idx']}")],
         [InlineKeyboardButton(text="📁 Другая категория", callback_data=f"movemac_{data['m_id']}")],
         [InlineKeyboardButton(text="✅ Завершить", callback_data="back_main")]
     ])
@@ -181,7 +177,6 @@ async def move_finish(msg: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "menu_inv")
 async def inv_start(call: CallbackQuery):
     await call.message.edit_text("📋 **ИНВЕНТАРИЗАЦИЯ**\nВыберите аппарат:", reply_markup=ikb_machines("invmac"))
-    await call.answer()
 
 @dp.callback_query(F.data.startswith("invmac_"))
 async def inv_select_cat(call: CallbackQuery, state: FSMContext):
@@ -189,7 +184,6 @@ async def inv_select_cat(call: CallbackQuery, state: FSMContext):
     await state.update_data(m_id=m_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=c, callback_data=f"icat_{i}")] for i, c in enumerate(CATEGORIES)] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]])
     await call.message.edit_text(f"📋 Аппарат {m_id}\nКатегория:", reply_markup=kb)
-    await call.answer()
 
 @dp.callback_query(F.data.startswith("icat_"))
 async def inv_select_prod(call: CallbackQuery, state: FSMContext):
@@ -201,14 +195,12 @@ async def inv_select_prod(call: CallbackQuery, state: FSMContext):
     kb = [[InlineKeyboardButton(text=p[0], callback_data=f"iprod_{p[0]}")] for p in prods]
     kb.append([InlineKeyboardButton(text="📁 Сменить категорию", callback_data=f"invmac_{(await state.get_data())['m_id']}")])
     await call.message.edit_text(f"🔍 Сверка {cat_name}:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-    await call.answer()
 
 @dp.callback_query(F.data.startswith("iprod_"))
 async def inv_get_qty(call: CallbackQuery, state: FSMContext):
     await state.update_data(p_name=call.data.replace("iprod_", ""))
     await call.message.edit_text(f"🔢 Остаток **{call.data.replace('iprod_', '')}**:", parse_mode="Markdown")
     await state.set_state(BotStates.inv_qty)
-    await call.answer()
 
 @dp.message(BotStates.inv_qty)
 async def inv_finish(msg: types.Message, state: FSMContext):
@@ -217,17 +209,14 @@ async def inv_finish(msg: types.Message, state: FSMContext):
     with sqlite3.connect('vending.db') as conn:
         conn.execute('INSERT INTO inventory (machine_id, item_name, quantity, timestamp, month_year) VALUES (?,?,?,?,?)',
                      (data['m_id'], data['p_name'], int(msg.text), datetime.now().strftime("%d.%m %H:%M"), datetime.now().strftime("%Y-%m")))
-    await bot.delete_message(msg.chat.id, msg.message_id - 1)
-    await msg.delete()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔍 Посчитать другой", callback_data=f"icat_{data['cat_idx']}")],
-        [InlineKeyboardButton(text="📁 Другая категория", callback_data=f"invmac_{data['m_id']}")],
         [InlineKeyboardButton(text="✅ Завершить", callback_data="back_main")]
     ])
     await msg.answer(f"✅ Учтено: {data['p_name']} ({msg.text} шт.)", reply_markup=kb)
     await state.set_state(None)
 
-# --- 7. ОТЧЕТЫ: ПЕРЕМЕЩЕНИЯ И ИНВЕНТАРИЗАЦИЯ ---
+# --- 7. ОТЧЕТЫ ПО АППАРАТАМ ---
 @dp.callback_query(F.data == "menu_rep_root")
 async def rep_root(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -236,35 +225,30 @@ async def rep_root(call: CallbackQuery):
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]
     ])
     await call.message.edit_text("Выберите отчет:", reply_markup=kb)
-    await call.answer()
 
 @dp.callback_query(F.data == "rt_move")
-async def rep_move_start(call: CallbackQuery, state: FSMContext):
-    await state.update_data(rtype="move")
-    await call.message.edit_text("📦 Выберите аппарат для отчета перемещений:", reply_markup=ikb_machines("rmac"))
-    await call.answer()
+async def rep_move_start(call: CallbackQuery):
+    await call.message.edit_text("📦 Выберите аппарат:", reply_markup=ikb_machines("rmac"))
 
 @dp.callback_query(F.data.startswith("rmac_"))
 async def rep_move_months(call: CallbackQuery, state: FSMContext):
     m_id = call.data.split("_")[1]
-    await state.update_data(m_id=m_id)
+    await state.update_data(m_id=m_id, rtype="move")
     with sqlite3.connect('vending.db') as conn:
         months = conn.execute('SELECT DISTINCT strftime("%Y-%m", date) FROM movements WHERE machine_id = ?', (m_id,)).fetchall()
-    if not months: return await call.answer("Нет данных за этот период!", show_alert=True)
+    if not months: return await call.answer("Нет данных!", show_alert=True)
     kb = [[InlineKeyboardButton(text=m[0], callback_data=f"f_rep_{m[0]}")] for m in months]
     kb.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_rep_root")])
-    await call.message.edit_text(f"Аппарат {m_id}. Выберите месяц:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-    await call.answer()
+    await call.message.edit_text(f"Аппарат {m_id}. Месяц:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 @dp.callback_query(F.data == "rt_inv")
-async def rep_inv_all(call: CallbackQuery, state: FSMContext):
+async def rep_inv_months(call: CallbackQuery, state: FSMContext):
     await state.update_data(rtype="inv")
     with sqlite3.connect('vending.db') as conn:
         months = conn.execute('SELECT DISTINCT month_year FROM inventory').fetchall()
-    if not months: return await call.answer("Нет данных!")
+    if not months: return await call.answer("Нет данных!", show_alert=True)
     kb = [[InlineKeyboardButton(text=m[0], callback_data=f"f_rep_{m[0]}")] for m in months]
-    await call.message.edit_text("Инвентаризация за:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-    await call.answer()
+    await call.message.edit_text("Инвентаризация за месяц:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
 
 @dp.callback_query(F.data.startswith("f_rep_"))
 async def rep_final(call: CallbackQuery, state: FSMContext):
@@ -278,33 +262,25 @@ async def rep_final(call: CallbackQuery, state: FSMContext):
             for m_id, item, qty, ts in res:
                 if m_id != curr: rep += f"\n🤖 **Аппарат {m_id}:**\n"; curr = m_id
                 rep += f" ├ {item}: {qty} шт. ({ts})\n"
-            await call.message.edit_text(rep, reply_markup=ikb_back_only(), parse_mode="Markdown")
-        else: 
+        else:
             res = conn.execute('SELECT item_name, SUM(quantity) FROM movements WHERE machine_id = ? AND date LIKE ? GROUP BY item_name', (data.get('m_id'), f"{month}%")).fetchall()
             rep = f"📦 **ПЕРЕМЕЩЕНИЯ: Аппарат {data.get('m_id')} ({month})**\n\n"
-            for r in res:
-                rep += f"• {r[0]}: {r[1]} шт.\n"
-            await call.message.edit_text(rep, reply_markup=ikb_back_only(), parse_mode="Markdown")
-    await call.answer()
+            for r in res: rep += f"• {r[0]}: {r[1]} шт.\n"
+    await call.message.edit_text(rep or "Данные не найдены", reply_markup=ikb_back_only(), parse_mode="Markdown")
 
-# --- 8. ПОДРОБНЫЙ ОТЧЕТ (КАЛЕНДАРЬ - БЕЗ ПРИВЯЗКИ К FSM) ---
+# --- 8. ПОДРОБНЫЙ ОТЧЕТ (КАЛЕНДАРЬ) ---
 @dp.callback_query(F.data == "menu_det_rep")
-async def det_rep_start(call: CallbackQuery, state: FSMContext):
-    await state.clear() # Сбрасываем лишнее, чтобы не мешало
-    await call.message.edit_text("📅 Выберите дату для подробного отчета:", reply_markup=await SimpleCalendar().start_calendar())
-    await call.answer()
+async def det_rep_start(call: CallbackQuery):
+    await call.message.edit_text("📅 Выберите дату:", reply_markup=await SimpleCalendar().start_calendar())
 
 @dp.callback_query(SimpleCalendarCallback.filter())
-async def det_rep_finish(call: CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext):
-    await call.answer()
+async def det_rep_finish(call: CallbackQuery, callback_data: SimpleCalendarCallback):
     selected, date = await SimpleCalendar().process_selection(call, callback_data)
     if selected:
         f_date = date.strftime("%Y-%m-%d")
         with sqlite3.connect('vending.db') as conn:
             data = conn.execute('SELECT machine_id, item_name, quantity FROM movements WHERE date = ? ORDER BY machine_id', (f_date,)).fetchall()
-        
-        if not data:
-            await call.message.edit_text(f"📭 Записей на {f_date} нет.", reply_markup=ikb_back_only())
+        if not data: await call.message.edit_text(f"📭 На {f_date} записей нет.", reply_markup=ikb_back_only())
         else:
             rep = f"📈 **ОТЧЕТ ЗА {f_date}**\n"
             curr = None
@@ -313,27 +289,26 @@ async def det_rep_finish(call: CallbackQuery, callback_data: SimpleCalendarCallb
                 rep += f" ├ {item}: {qty} шт.\n"
             await call.message.edit_text(rep, reply_markup=ikb_back_only(), parse_mode="Markdown")
 
-# --- 9. УПРАВЛЕНИЕ АССОРТИМЕНТОМ ---
+# --- 9. УПРАВЛЕНИЕ ТОВАРАМИ (ДОБАВЛЕНИЕ И УДАЛЕНИЕ) ---
 @dp.callback_query(F.data == "menu_manage")
 async def mng_root(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Добавить товар", callback_data="mng_add")],
+        [InlineKeyboardButton(text="🗑 Удалить товар", callback_data="mng_del")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]
     ])
-    await call.message.edit_text("⚙️ Управление:", reply_markup=kb)
-    await call.answer()
+    await call.message.edit_text("⚙️ **УПРАВЛЕНИЕ АССОРТИМЕНТОМ**", reply_markup=kb)
 
 @dp.callback_query(F.data == "mng_add")
 async def mng_add_name(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text("Название товара:")
+    await call.message.edit_text("Введите название нового товара:")
     await state.set_state(BotStates.adding_prod_name)
-    await call.answer()
 
 @dp.message(BotStates.adding_prod_name)
 async def mng_add_cat(msg: types.Message, state: FSMContext):
     await state.update_data(name=msg.text)
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=c, callback_data=f"ac_{i}")] for i, c in enumerate(CATEGORIES)])
-    await msg.answer(f"Категория для {msg.text}:", reply_markup=kb)
+    await msg.answer(f"Выберите категорию для '{msg.text}':", reply_markup=kb)
     await state.set_state(BotStates.adding_prod_cat)
 
 @dp.callback_query(F.data.startswith("ac_"))
@@ -342,17 +317,138 @@ async def mng_add_fin(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     with sqlite3.connect('vending.db') as conn:
         conn.execute('INSERT OR REPLACE INTO products VALUES (?,?)', (data['name'], cat))
-    await call.message.edit_text(f"✅ {data['name']} добавлен.", reply_markup=ikb_back_only())
+    await call.message.edit_text(f"✅ Товар '{data['name']}' добавлен в категорию {cat}.", reply_markup=ikb_back_only())
     await state.clear()
-    await call.answer()
 
-# === ЦЕХОВОЕ ПИТАНИЕ ОСТАЛОСЬ БЕЗ ИЗМЕНЕНИЙ (я его сократил тут для лимита символов, но оно полностью работает как в предыдущем сообщении) ===
-# Если хочешь, я добавлю его обратно, но проблема была только в отчетах.
+@dp.callback_query(F.data == "mng_del")
+async def mng_del_start(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=c, callback_data=f"dc_{i}")] for i, c in enumerate(CATEGORIES)] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_manage")]])
+    await call.message.edit_text("🗑 Из какой категории удалить товар?", reply_markup=kb)
 
+@dp.callback_query(F.data.startswith("dc_"))
+async def mng_del_list(call: CallbackQuery):
+    cat_name = CATEGORIES[int(call.data.split("_")[1])]
+    with sqlite3.connect('vending.db') as conn:
+        prods = conn.execute('SELECT name FROM products WHERE category = ?', (cat_name,)).fetchall()
+    if not prods: return await call.answer("Категория пуста!", show_alert=True)
+    kb = [[InlineKeyboardButton(text=f"❌ {p[0]}", callback_data=f"delp_{p[0]}")] for p in prods]
+    kb.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="mng_del")])
+    await call.message.edit_text(f"Выберите товар для удаления из {cat_name}:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+@dp.callback_query(F.data.startswith("delp_"))
+async def mng_del_fin(call: CallbackQuery):
+    p_name = call.data.replace("delp_", "")
+    with sqlite3.connect('vending.db') as conn:
+        conn.execute('DELETE FROM products WHERE name = ?', (p_name,))
+    await call.answer(f"Товар {p_name} удален")
+    await mng_del_start(call)
+
+# --- 10. ЦЕХОВОЕ ПИТАНИЕ (ПОЛНЫЙ ЦИКЛ) ---
+@dp.callback_query(F.data == "menu_staff_root")
+async def staff_root(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Добавить товар в список цеха", callback_data="st_add")],
+        [InlineKeyboardButton(text="📉 Списание (Учет)", callback_data="st_cons")],
+        [InlineKeyboardButton(text="📊 Отчеты по цеху", callback_data="staff_rep_months")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")]
+    ])
+    await call.message.edit_text("🍽 **ЦЕХОВОЕ ПИТАНИЕ**", reply_markup=kb)
+
+@dp.callback_query(F.data == "st_add")
+async def staff_add_name(call: CallbackQuery, state: FSMContext):
+    await call.message.edit_text("Название товара для цеха:")
+    await state.set_state(StaffStates.adding_staff_name)
+
+@dp.message(StaffStates.adding_staff_name)
+async def staff_add_cat(msg: types.Message, state: FSMContext):
+    await state.update_data(name=msg.text)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=c, callback_data=f"sac_{i}")] for i, c in enumerate(STAFF_CATEGORIES)])
+    await msg.answer("Категория:", reply_markup=kb)
+    await state.set_state(StaffStates.adding_staff_cat)
+
+@dp.callback_query(F.data.startswith("sac_"))
+async def staff_add_fin(call: CallbackQuery, state: FSMContext):
+    cat = STAFF_CATEGORIES[int(call.data.split("_")[1])]
+    data = await state.get_data()
+    with sqlite3.connect('vending.db') as conn:
+        conn.execute('INSERT OR REPLACE INTO staff_products VALUES (?,?)', (data['name'], cat))
+    await call.message.edit_text(f"✅ {data['name']} добавлен в список цеха.", reply_markup=ikb_back_only())
+    await state.clear()
+
+@dp.callback_query(F.data == "st_cons")
+async def staff_cons_cat(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=c, callback_data=f"scc_{i}")] for i, c in enumerate(STAFF_CATEGORIES)] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_staff_root")]])
+    await call.message.edit_text("Выберите категорию для списания:", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("scc_"))
+async def staff_cons_prod(call: CallbackQuery, state: FSMContext):
+    cat = STAFF_CATEGORIES[int(call.data.split("_")[1])]
+    with sqlite3.connect('vending.db') as conn:
+        prods = conn.execute('SELECT name FROM staff_products WHERE category = ?', (cat,)).fetchall()
+    if not prods: return await call.answer("Нет товаров!", show_alert=True)
+    kb = [[InlineKeyboardButton(text=p[0], callback_data=f"scp_{p[0]}")] for p in prods]
+    await call.message.edit_text(f"Что списываем ({cat})?", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+@dp.callback_query(F.data.startswith("scp_"))
+async def staff_cons_type(call: CallbackQuery, state: FSMContext):
+    await state.update_data(p_name=call.data.replace("scp_", ""))
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=f"sctype_{i}")] for i, t in enumerate(CONSUMPTION_TYPES)])
+    await call.message.edit_text("Причина списания:", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("sctype_"))
+async def staff_cons_qty(call: CallbackQuery, state: FSMContext):
+    await state.update_data(ctype=int(call.data.split("_")[1]))
+    await call.message.edit_text(f"Количество **{ (await state.get_data())['p_name'] }**:", parse_mode="Markdown")
+    await state.set_state(StaffStates.consuming_qty)
+
+@dp.message(StaffStates.consuming_qty)
+async def staff_cons_finish(msg: types.Message, state: FSMContext):
+    if not msg.text.isdigit(): return await msg.answer("Введите число!")
+    data = await state.get_data()
+    date = datetime.now().strftime("%Y-%m-%d")
+    qty = int(msg.text)
+    
+    col = "eaten" if data['ctype'] == 0 else "defect" if data['ctype'] == 1 else "expired"
+    with sqlite3.connect('vending.db') as conn:
+        conn.execute(f'''INSERT INTO staff_consumption (date, item_name, {col}, added_by) 
+                         VALUES (?,?,?,?)''', (date, data['p_name'], qty, msg.from_user.id))
+    
+    await msg.answer(f"✅ Списано: {data['p_name']} — {qty} шт.", reply_markup=ikb_back_only())
+    await state.clear()
+
+@dp.callback_query(F.data == "staff_rep_months")
+async def staff_rep_months(call: CallbackQuery):
+    with sqlite3.connect('vending.db') as conn:
+        months = conn.execute('SELECT DISTINCT strftime("%Y-%m", date) FROM staff_consumption').fetchall()
+    if not months: return await call.answer("Нет данных!", show_alert=True)
+    kb = [[InlineKeyboardButton(text=m[0], callback_data=f"strm_{m[0]}")] for m in months]
+    kb.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main")])
+    await call.message.edit_text("Выберите месяц отчета по цеху:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+@dp.callback_query(F.data.startswith("strm_"))
+async def staff_rep_days(call: CallbackQuery):
+    month = call.data.split("_")[1]
+    with sqlite3.connect('vending.db') as conn:
+        days = conn.execute('SELECT DISTINCT date FROM staff_consumption WHERE date LIKE ?', (f"{month}%",)).fetchall()
+    kb = [[InlineKeyboardButton(text=d[0], callback_data=f"strd_{d[0]}")] for d in days]
+    kb.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="staff_rep_months")])
+    await call.message.edit_text(f"Выберите день ({month}):", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+@dp.callback_query(F.data.startswith("strd_"))
+async def staff_rep_final(call: CallbackQuery):
+    date = call.data.split("_")[1]
+    with sqlite3.connect('vending.db') as conn:
+        res = conn.execute('SELECT item_name, SUM(eaten), SUM(defect), SUM(expired) FROM staff_consumption WHERE date = ? GROUP BY item_name', (date,)).fetchall()
+    
+    rep = f"🍽 **ОТЧЕТ ЦЕХ: {date}**\n\n"
+    for r in res:
+        rep += f"🔸 **{r[0]}**\n   └ Кассиры: {r[1]} | Брак: {r[2]} | Срок: {r[3]}\n"
+    await call.message.edit_text(rep or "Нет данных", reply_markup=ikb_back_only(), parse_mode="Markdown")
+
+# --- 11. ЗАПУСК ---
 async def main():
     init_db()
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    asyncio.run(main())
-
+    async asyncio.run(main())
