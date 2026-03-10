@@ -1,4 +1,4 @@
 aiogram==3.26.0
 aiogram-calendar==0.6.0
-pydantic-settings==2.7.0
+
 
