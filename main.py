@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 # --- 1. НАСТРОЙКИ ---
-API_TOKEN = '8727948676:AAHlEPiOj_lnL5va6FUfVq2DoaxkEhNvsBk'
+API_TOKEN = '8727948676:AAHeJCwjjgQE6GQjtQwLfbT68B38K8xKrIc'
 
 ADMIN_PASSWORD = "мойпароль"   
 VIEWER_PASSWORD = "отчет"  
@@ -355,3 +355,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
