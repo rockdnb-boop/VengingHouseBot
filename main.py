@@ -17,8 +17,8 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 # --- 1. НАСТРОЙКИ ---
 API_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_PASSWORD = os.getenv('ADMIN_PASS', 'мойпароль')   
-VIEWER_PASSWORD = os.getenv('VIEWER_PASS', 'отчет')  
+ADMIN_PASSWORD = os.getenv('ADMIN_PASS')   
+VIEWER_PASSWORD = os.getenv('VIEWER_PASS')  
 
 if not API_TOKEN:
     raise ValueError("❌ ОШИБКА: Токен бота не найден! Укажите BOT_TOKEN.")
@@ -550,3 +550,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
