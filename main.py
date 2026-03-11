@@ -506,3 +506,19 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
+from aiogram.types import FSInputFile
+import os
+
+@dp.message(Command("get_db"))
+async def send_db_file(msg: types.Message):
+    # Проверка на админа (замени на свой ID или проверку роли)
+    role = get_user_role(msg.from_user.id)
+    if role == "admin":
+        if os.path.exists('vending.db'):
+            await msg.answer_document(FSInputFile('vending.db'), caption="Вот актуальная база данных 📦")
+        else:
+            await msg.answer("Файл базы не найден! ❌")
+    else:
+        await msg.answer("У вас нет прав для этой команды. ⛔️")
+
