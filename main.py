@@ -1,31 +1,27 @@
 import asyncio
 import logging
-import sqlite3
-import os  # Добавлено для работы с файлами
+import aiosqlite # ИЗМЕНЕНО: Асинхронная работа с БД
+import os
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile # Добавлен FSInputFile
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 
-from dotenv import load_dotenv # Добавлено для загрузки переменных из .env
+from dotenv import load_dotenv
 
-# Загружаем переменные окружения из файла .env (если запускаем локально на ПК)
 load_dotenv()
-
-# Библиотека для календаря
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
-# --- 1. НАСТРОЙКИ (Теперь безопасно берутся из окружения) ---
+# --- 1. НАСТРОЙКИ ---
 API_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_PASSWORD = os.getenv('ADMIN_PASS', 'мойпароль')   
 VIEWER_PASSWORD = os.getenv('VIEWER_PASS', 'отчет')  
 
-# Защита от запуска без токена
 if not API_TOKEN:
-    raise ValueError("❌ ОШИБКА: Токен бота не найден! Укажите BOT_TOKEN в переменных окружения на хостинге или в файле .env.")
+    raise ValueError("❌ ОШИБКА: Токен бота не найден! Укажите BOT_TOKEN.")
 
 CATEGORIES = ["🥤 Напитки", "🥨 Снэки", "🍫 Шоколад"]
 STAFF_CATEGORIES = ["🥤 Напитки", "🍔 Еда"]
@@ -50,22 +46,23 @@ class StaffStates(StatesGroup):
     adding_staff_cat = State()
     consuming_qty = State()
 
-# --- 3. БАЗА ДАННЫХ ---
-def init_db():
-    with sqlite3.connect('vending.db') as conn:
-        conn.execute('CREATE TABLE IF NOT EXISTS authorized_users (user_id INTEGER PRIMARY KEY, role TEXT)')
-        conn.execute('CREATE TABLE IF NOT EXISTS movements (id INTEGER PRIMARY KEY AUTOINCREMENT, machine_id INTEGER, item_name TEXT, quantity INTEGER, date TEXT)')
-        conn.execute('CREATE TABLE IF NOT EXISTS products (name TEXT UNIQUE, category TEXT)')
-        conn.execute('CREATE TABLE IF NOT EXISTS inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, machine_id INTEGER, item_name TEXT, quantity INTEGER, timestamp TEXT, month_year TEXT)')
-        conn.execute('CREATE TABLE IF NOT EXISTS staff_products (name TEXT UNIQUE, category TEXT)')
-        conn.execute('''CREATE TABLE IF NOT EXISTS staff_consumption 
+# --- 3. БАЗА ДАННЫХ (Теперь Асинхронная) ---
+async def init_db():
+    async with aiosqlite.connect('vending.db') as conn:
+        await conn.execute('CREATE TABLE IF NOT EXISTS authorized_users (user_id INTEGER PRIMARY KEY, role TEXT)')
+        await conn.execute('CREATE TABLE IF NOT EXISTS movements (id INTEGER PRIMARY KEY AUTOINCREMENT, machine_id INTEGER, item_name TEXT, quantity INTEGER, date TEXT)')
+        await conn.execute('CREATE TABLE IF NOT EXISTS products (name TEXT UNIQUE, category TEXT)')
+        await conn.execute('CREATE TABLE IF NOT EXISTS inventory (id INTEGER PRIMARY KEY AUTOINCREMENT, machine_id INTEGER, item_name TEXT, quantity INTEGER, timestamp TEXT, month_year TEXT)')
+        await conn.execute('CREATE TABLE IF NOT EXISTS staff_products (name TEXT UNIQUE, category TEXT)')
+        await conn.execute('''CREATE TABLE IF NOT EXISTS staff_consumption 
                         (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, item_name TEXT, 
                          eaten INTEGER DEFAULT 0, defect INTEGER DEFAULT 0, expired INTEGER DEFAULT 0, added_by INTEGER)''')
-        conn.commit()
+        await conn.commit()
 
-def get_user_role(user_id):
-    with sqlite3.connect('vending.db') as conn:
-        res = conn.execute('SELECT role FROM authorized_users WHERE user_id = ?', (user_id,)).fetchone()
+async def get_user_role(user_id):
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT role FROM authorized_users WHERE user_id = ?', (user_id,))
+        res = await cursor.fetchone()
     return res[0] if res else None
 
 # --- 4. КЛАВИАТУРЫ ---
@@ -99,7 +96,7 @@ def ikb_back_only():
 @dp.message(Command("start"))
 async def start_cmd(msg: types.Message, state: FSMContext):
     await state.clear()
-    role = get_user_role(msg.from_user.id)
+    role = await get_user_role(msg.from_user.id)
     if role: 
         await show_main_menu(msg, msg.from_user.id, state)
     else:
@@ -110,17 +107,17 @@ async def start_cmd(msg: types.Message, state: FSMContext):
 async def auth_check(msg: types.Message, state: FSMContext):
     role = "admin" if msg.text == ADMIN_PASSWORD else "viewer" if msg.text == VIEWER_PASSWORD else None
     if role:
-        with sqlite3.connect('vending.db') as conn:
-            conn.execute('INSERT OR REPLACE INTO authorized_users (user_id, role) VALUES (?, ?)', (msg.from_user.id, role))
+        async with aiosqlite.connect('vending.db') as conn:
+            await conn.execute('INSERT OR REPLACE INTO authorized_users (user_id, role) VALUES (?, ?)', (msg.from_user.id, role))
+            await conn.commit()
         await msg.delete()
         await show_main_menu(msg, msg.from_user.id, state)
     else: 
         await msg.answer("❌ Пароль не подходит.")
 
-# НОВАЯ КОМАНДА ДЛЯ ВЫГРУЗКИ БАЗЫ
 @dp.message(Command("get_db"))
 async def send_db_file(msg: types.Message):
-    role = get_user_role(msg.from_user.id)
+    role = await get_user_role(msg.from_user.id)
     if role == "admin":
         if os.path.exists('vending.db'):
             await msg.answer_document(FSInputFile('vending.db'), caption="📦 Актуальный файл базы данных.")
@@ -131,7 +128,7 @@ async def send_db_file(msg: types.Message):
 
 async def show_main_menu(msg_or_call, user_id, state: FSMContext, edit=False):
     await state.clear()
-    role = get_user_role(user_id)
+    role = await get_user_role(user_id)
     text = f"👤 **МЕНЮ: {'АДМИНИСТРАТОР' if role=='admin' else 'ПРОСМОТР ОТЧЕТОВ'}**"
     kb = ikb_main(role)
     if edit: 
@@ -147,8 +144,9 @@ async def back_to_main(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "logout")
 async def logout(call: CallbackQuery, state: FSMContext):
-    with sqlite3.connect('vending.db') as conn:
-        conn.execute('DELETE FROM authorized_users WHERE user_id = ?', (call.from_user.id,))
+    async with aiosqlite.connect('vending.db') as conn:
+        await conn.execute('DELETE FROM authorized_users WHERE user_id = ?', (call.from_user.id,))
+        await conn.commit()
     await call.message.edit_text("🚪 Вы вышли. Нажмите /start для входа.")
     await state.clear()
     await call.answer()
@@ -172,8 +170,9 @@ async def move_select_prod(call: CallbackQuery, state: FSMContext):
     cat_idx = int(call.data.split("_")[1])
     cat_name = CATEGORIES[cat_idx]
     await state.update_data(cat_name=cat_name, cat_idx=cat_idx)
-    with sqlite3.connect('vending.db') as conn:
-        prods = conn.execute('SELECT name FROM products WHERE category = ?', (cat_name,)).fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT name FROM products WHERE category = ?', (cat_name,))
+        prods = await cursor.fetchall()
     if not prods: 
         return await call.answer("Нет товаров в этой категории!", show_alert=True)
     kb = [[InlineKeyboardButton(text=p[0], callback_data=f"mprod_{p[0]}")] for p in prods]
@@ -193,9 +192,10 @@ async def move_finish(msg: types.Message, state: FSMContext):
     if not msg.text.isdigit(): 
         return await msg.answer("Введите число!")
     data = await state.get_data()
-    with sqlite3.connect('vending.db') as conn:
-        conn.execute('INSERT INTO movements (machine_id, item_name, quantity, date) VALUES (?,?,?,?)',
+    async with aiosqlite.connect('vending.db') as conn:
+        await conn.execute('INSERT INTO movements (machine_id, item_name, quantity, date) VALUES (?,?,?,?)',
                      (data['m_id'], data['p_name'], int(msg.text), datetime.now().strftime("%Y-%m-%d")))
+        await conn.commit()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Ещё товар сюда", callback_data=f"mcat_{data['cat_idx']}")],
         [InlineKeyboardButton(text="📁 Другая категория", callback_data=f"movemac_{data['m_id']}")],
@@ -222,8 +222,9 @@ async def inv_select_prod(call: CallbackQuery, state: FSMContext):
     cat_idx = int(call.data.split("_")[1])
     cat_name = CATEGORIES[cat_idx]
     await state.update_data(cat_name=cat_name, cat_idx=cat_idx)
-    with sqlite3.connect('vending.db') as conn:
-        prods = conn.execute('SELECT name FROM products WHERE category = ?', (cat_name,)).fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT name FROM products WHERE category = ?', (cat_name,))
+        prods = await cursor.fetchall()
     if not prods:
         return await call.answer("Нет товаров!", show_alert=True)
     kb = [[InlineKeyboardButton(text=p[0], callback_data=f"iprod_{p[0]}")] for p in prods]
@@ -243,9 +244,10 @@ async def inv_finish(msg: types.Message, state: FSMContext):
     if not msg.text.isdigit(): 
         return await msg.answer("Введите число!")
     data = await state.get_data()
-    with sqlite3.connect('vending.db') as conn:
-        conn.execute('INSERT INTO inventory (machine_id, item_name, quantity, timestamp, month_year) VALUES (?,?,?,?,?)',
+    async with aiosqlite.connect('vending.db') as conn:
+        await conn.execute('INSERT INTO inventory (machine_id, item_name, quantity, timestamp, month_year) VALUES (?,?,?,?,?)',
                      (data['m_id'], data['p_name'], int(msg.text), datetime.now().strftime("%d.%m %H:%M"), datetime.now().strftime("%Y-%m")))
+        await conn.commit()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔍 Посчитать другой", callback_data=f"icat_{data['cat_idx']}")],
         [InlineKeyboardButton(text="✅ Завершить", callback_data="back_main")]
@@ -273,8 +275,9 @@ async def rep_move_start(call: CallbackQuery):
 async def rep_move_months(call: CallbackQuery, state: FSMContext):
     m_id = call.data.split("_")[1]
     await state.update_data(m_id=m_id, rtype="move")
-    with sqlite3.connect('vending.db') as conn:
-        months = conn.execute('SELECT DISTINCT strftime("%Y-%m", date) FROM movements WHERE machine_id = ?', (m_id,)).fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT DISTINCT strftime("%Y-%m", date) FROM movements WHERE machine_id = ?', (m_id,))
+        months = await cursor.fetchall()
     if not months: 
         return await call.answer("Нет данных!", show_alert=True)
     kb = [[InlineKeyboardButton(text=m[0], callback_data=f"f_rep_{m[0]}")] for m in months]
@@ -285,8 +288,9 @@ async def rep_move_months(call: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "rt_inv")
 async def rep_inv_months(call: CallbackQuery, state: FSMContext):
     await state.update_data(rtype="inv")
-    with sqlite3.connect('vending.db') as conn:
-        months = conn.execute('SELECT DISTINCT month_year FROM inventory').fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT DISTINCT month_year FROM inventory')
+        months = await cursor.fetchall()
     if not months: 
         return await call.answer("Нет данных!", show_alert=True)
     kb = [[InlineKeyboardButton(text=m[0], callback_data=f"f_rep_{m[0]}")] for m in months]
@@ -299,9 +303,10 @@ async def rep_final(call: CallbackQuery, state: FSMContext):
     month = call.data.split("_")[2]
     data = await state.get_data()
     rep = ""
-    with sqlite3.connect('vending.db') as conn:
+    async with aiosqlite.connect('vending.db') as conn:
         if data.get('rtype') == 'inv':
-            res = conn.execute('SELECT machine_id, item_name, quantity, timestamp FROM inventory WHERE month_year = ? ORDER BY machine_id', (month,)).fetchall()
+            cursor = await conn.execute('SELECT machine_id, item_name, quantity, timestamp FROM inventory WHERE month_year = ? ORDER BY machine_id', (month,))
+            res = await cursor.fetchall()
             rep = f"📋 **ИНВЕНТАРКА: {month}**\n"
             curr = None
             for m_id, item, qty, ts in res:
@@ -310,7 +315,8 @@ async def rep_final(call: CallbackQuery, state: FSMContext):
                     curr = m_id
                 rep += f" ├ {item}: {qty} шт. ({ts})\n"
         else:
-            res = conn.execute('SELECT item_name, SUM(quantity) FROM movements WHERE machine_id = ? AND date LIKE ? GROUP BY item_name', (data.get('m_id'), f"{month}%")).fetchall()
+            cursor = await conn.execute('SELECT item_name, SUM(quantity) FROM movements WHERE machine_id = ? AND date LIKE ? GROUP BY item_name', (data.get('m_id'), f"{month}%"))
+            res = await cursor.fetchall()
             rep = f"📦 **ПЕРЕМЕЩЕНИЯ: Аппарат {data.get('m_id')} ({month})**\n\n"
             for r in res: 
                 rep += f"• {r[0]}: {r[1]} шт.\n"
@@ -329,8 +335,9 @@ async def det_rep_finish(call: CallbackQuery, callback_data: SimpleCalendarCallb
     selected, date = await SimpleCalendar().process_selection(call, callback_data)
     if selected:
         f_date = date.strftime("%Y-%m-%d")
-        with sqlite3.connect('vending.db') as conn:
-            data = conn.execute('SELECT machine_id, item_name, quantity FROM movements WHERE date = ? ORDER BY machine_id', (f_date,)).fetchall()
+        async with aiosqlite.connect('vending.db') as conn:
+            cursor = await conn.execute('SELECT machine_id, item_name, quantity FROM movements WHERE date = ? ORDER BY machine_id', (f_date,))
+            data = await cursor.fetchall()
         if not data: 
             await call.message.edit_text(f"📭 На {f_date} записей нет.", reply_markup=ikb_back_only())
         else:
@@ -372,11 +379,14 @@ async def mng_add_cat(msg: types.Message, state: FSMContext):
 async def mng_add_fin(call: CallbackQuery, state: FSMContext):
     cat = CATEGORIES[int(call.data.split("_")[1])]
     data = await state.get_data()
-    with sqlite3.connect('vending.db') as conn:
-        conn.execute('INSERT OR REPLACE INTO products VALUES (?,?)', (data['name'], cat))
-    await call.message.edit_text(f"✅ Товар '{data['name']}' добавлен в категорию {cat}.", reply_markup=ikb_back_only())
+    async with aiosqlite.connect('vending.db') as conn:
+        await conn.execute('INSERT OR REPLACE INTO products VALUES (?,?)', (data.get('name', 'Без имени'), cat))
+        await conn.commit()
+    
+    # ИСПРАВЛЕНИЕ: Автоматически возвращаем в меню управления
+    await call.answer(f"✅ Товар '{data.get('name')}' добавлен!", show_alert=True)
     await state.clear()
-    await call.answer()
+    await mng_root(call)
 
 @dp.callback_query(F.data == "mng_del")
 async def mng_del_start(call: CallbackQuery):
@@ -388,8 +398,9 @@ async def mng_del_start(call: CallbackQuery):
 async def mng_del_list(call: CallbackQuery):
     cat_idx = int(call.data.split("_")[1])
     cat_name = CATEGORIES[cat_idx]
-    with sqlite3.connect('vending.db') as conn:
-        prods = conn.execute('SELECT name FROM products WHERE category = ?', (cat_name,)).fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT name FROM products WHERE category = ?', (cat_name,))
+        prods = await cursor.fetchall()
     if not prods: 
         return await call.answer("Категория пуста!", show_alert=True)
     kb = [[InlineKeyboardButton(text=f"❌ {p[0]}", callback_data=f"delp_{p[0]}")] for p in prods]
@@ -400,8 +411,9 @@ async def mng_del_list(call: CallbackQuery):
 @dp.callback_query(F.data.startswith("delp_"))
 async def mng_del_fin(call: CallbackQuery):
     p_name = call.data.replace("delp_", "")
-    with sqlite3.connect('vending.db') as conn:
-        conn.execute('DELETE FROM products WHERE name = ?', (p_name,))
+    async with aiosqlite.connect('vending.db') as conn:
+        await conn.execute('DELETE FROM products WHERE name = ?', (p_name,))
+        await conn.commit()
     await call.answer(f"Товар {p_name} удален")
     await mng_del_start(call)
 
@@ -435,11 +447,14 @@ async def staff_add_fin(call: CallbackQuery, state: FSMContext):
     cat_idx = int(call.data.split("_")[1])
     cat = STAFF_CATEGORIES[cat_idx]
     data = await state.get_data()
-    with sqlite3.connect('vending.db') as conn:
-        conn.execute('INSERT OR REPLACE INTO staff_products VALUES (?,?)', (data['name'], cat))
-    await call.message.edit_text(f"✅ {data['name']} добавлен в список цеха.", reply_markup=ikb_back_only())
+    async with aiosqlite.connect('vending.db') as conn:
+        await conn.execute('INSERT OR REPLACE INTO staff_products VALUES (?,?)', (data.get('name', 'Без имени'), cat))
+        await conn.commit()
+    
+    # ИСПРАВЛЕНИЕ: Автоматически возвращаем в меню цеха
+    await call.answer(f"✅ {data.get('name')} добавлен!", show_alert=True)
     await state.clear()
-    await call.answer()
+    await staff_root(call)
 
 @dp.callback_query(F.data == "st_cons")
 async def staff_cons_cat(call: CallbackQuery):
@@ -450,8 +465,9 @@ async def staff_cons_cat(call: CallbackQuery):
 @dp.callback_query(F.data.startswith("scc_"))
 async def staff_cons_prod(call: CallbackQuery, state: FSMContext):
     cat = STAFF_CATEGORIES[int(call.data.split("_")[1])]
-    with sqlite3.connect('vending.db') as conn:
-        prods = conn.execute('SELECT name FROM staff_products WHERE category = ?', (cat,)).fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT name FROM staff_products WHERE category = ?', (cat,))
+        prods = await cursor.fetchall()
     if not prods: 
         return await call.answer("Нет товаров!", show_alert=True)
     kb = [[InlineKeyboardButton(text=p[0], callback_data=f"scp_{p[0]}")] for p in prods]
@@ -483,16 +499,18 @@ async def staff_cons_finish(msg: types.Message, state: FSMContext):
     qty = int(msg.text)
     col = "eaten" if data['ctype'] == 0 else "defect" if data['ctype'] == 1 else "expired"
     
-    with sqlite3.connect('vending.db') as conn:
-        conn.execute(f'INSERT INTO staff_consumption (date, item_name, {col}, added_by) VALUES (?,?,?,?)', (date, data['p_name'], qty, msg.from_user.id))
+    async with aiosqlite.connect('vending.db') as conn:
+        await conn.execute(f'INSERT INTO staff_consumption (date, item_name, {col}, added_by) VALUES (?,?,?,?)', (date, data['p_name'], qty, msg.from_user.id))
+        await conn.commit()
     
     await msg.answer(f"✅ Учтено: {data['p_name']} — {qty} шт.", reply_markup=ikb_back_only())
     await state.clear()
 
 @dp.callback_query(F.data == "staff_rep_months")
 async def staff_rep_months(call: CallbackQuery):
-    with sqlite3.connect('vending.db') as conn:
-        months = conn.execute('SELECT DISTINCT strftime("%Y-%m", date) FROM staff_consumption').fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT DISTINCT strftime("%Y-%m", date) FROM staff_consumption')
+        months = await cursor.fetchall()
     if not months: 
         return await call.answer("Нет данных!", show_alert=True)
     kb = [[InlineKeyboardButton(text=m[0], callback_data=f"strm_{m[0]}")] for m in months]
@@ -503,8 +521,9 @@ async def staff_rep_months(call: CallbackQuery):
 @dp.callback_query(F.data.startswith("strm_"))
 async def staff_rep_days(call: CallbackQuery):
     month = call.data.split("_")[1]
-    with sqlite3.connect('vending.db') as conn:
-        days = conn.execute('SELECT DISTINCT date FROM staff_consumption WHERE date LIKE ?', (f"{month}%",)).fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT DISTINCT date FROM staff_consumption WHERE date LIKE ?', (f"{month}%",))
+        days = await cursor.fetchall()
     kb = [[InlineKeyboardButton(text=d[0], callback_data=f"strd_{d[0]}")] for d in days]
     kb.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="staff_rep_months")])
     await call.message.edit_text(f"День ({month}):", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
@@ -513,8 +532,9 @@ async def staff_rep_days(call: CallbackQuery):
 @dp.callback_query(F.data.startswith("strd_"))
 async def staff_rep_final(call: CallbackQuery):
     date = call.data.split("_")[1]
-    with sqlite3.connect('vending.db') as conn:
-        res = conn.execute('SELECT item_name, SUM(eaten), SUM(defect), SUM(expired) FROM staff_consumption WHERE date = ? GROUP BY item_name', (date,)).fetchall()
+    async with aiosqlite.connect('vending.db') as conn:
+        cursor = await conn.execute('SELECT item_name, SUM(eaten), SUM(defect), SUM(expired) FROM staff_consumption WHERE date = ? GROUP BY item_name', (date,))
+        res = await cursor.fetchall()
     rep = f"🍽 **ОТЧЕТ ЦЕХ: {date}**\n\n"
     for r in res:
         rep += f"🔸 **{r[0]}**\n   └ Кассиры: {r[1]} | Брак: {r[2]} | Срок: {r[3]}\n"
@@ -523,7 +543,9 @@ async def staff_rep_final(call: CallbackQuery):
 
 # --- 11. ЗАПУСК ---
 async def main():
-    init_db()
+    await init_db()
+    # ИСПРАВЛЕНИЕ: Очищаем очередь старых кликов, чтобы не было ошибки Flood Limit при старте!
+    await bot.delete_webhook(drop_pending_updates=True) 
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
