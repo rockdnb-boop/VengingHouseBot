@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import sqlite3
+import os  # Добавлено для работы с файлами
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile # Добавлен FSInputFile
 
 # Библиотека для календаря
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
@@ -106,6 +107,18 @@ async def auth_check(msg: types.Message, state: FSMContext):
         await show_main_menu(msg, msg.from_user.id, state)
     else: 
         await msg.answer("❌ Пароль не подходит.")
+
+# НОВАЯ КОМАНДА ДЛЯ ВЫГРУЗКИ БАЗЫ
+@dp.message(Command("get_db"))
+async def send_db_file(msg: types.Message):
+    role = get_user_role(msg.from_user.id)
+    if role == "admin":
+        if os.path.exists('vending.db'):
+            await msg.answer_document(FSInputFile('vending.db'), caption="📦 Актуальный файл базы данных.")
+        else:
+            await msg.answer("❌ Файл базы данных не найден.")
+    else:
+        await msg.answer("⛔️ У вас нет прав для выполнения этой команды.")
 
 async def show_main_menu(msg_or_call, user_id, state: FSMContext, edit=False):
     await state.clear()
@@ -495,7 +508,7 @@ async def staff_rep_final(call: CallbackQuery):
         res = conn.execute('SELECT item_name, SUM(eaten), SUM(defect), SUM(expired) FROM staff_consumption WHERE date = ? GROUP BY item_name', (date,)).fetchall()
     rep = f"🍽 **ОТЧЕТ ЦЕХ: {date}**\n\n"
     for r in res:
-        rep += f"🔸 **{r[0]}**\n   └ Кассиры: {r[1]} | Брак: {r[2]} | Срок: {r[3]}\n"
+        rep += f"🔸 **{r[0]}**\n    └ Кассиры: {r[1]} | Брак: {r[2]} | Срок: {r[3]}\n"
     await call.message.edit_text(rep or "Нет данных", reply_markup=ikb_back_only(), parse_mode="Markdown")
     await call.answer()
 
@@ -506,7 +519,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
-
-
-
