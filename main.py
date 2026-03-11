@@ -10,13 +10,22 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile # Добавлен FSInputFile
 
+from dotenv import load_dotenv # Добавлено для загрузки переменных из .env
+
+# Загружаем переменные окружения из файла .env (если запускаем локально на ПК)
+load_dotenv()
+
 # Библиотека для календаря
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
-# --- 1. НАСТРОЙКИ ---
-API_TOKEN = '8727948676:AAHeJCwjjgQE6GQjtQwLfbT68B38K8xKrIc'
-ADMIN_PASSWORD = "мойпароль"   
-VIEWER_PASSWORD = "отчет"  
+# --- 1. НАСТРОЙКИ (Теперь безопасно берутся из окружения) ---
+API_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_PASSWORD = os.getenv('ADMIN_PASS', 'мойпароль')   
+VIEWER_PASSWORD = os.getenv('VIEWER_PASS', 'отчет')  
+
+# Защита от запуска без токена
+if not API_TOKEN:
+    raise ValueError("❌ ОШИБКА: Токен бота не найден! Укажите BOT_TOKEN в переменных окружения на хостинге или в файле .env.")
 
 CATEGORIES = ["🥤 Напитки", "🥨 Снэки", "🍫 Шоколад"]
 STAFF_CATEGORIES = ["🥤 Напитки", "🍔 Еда"]
@@ -508,7 +517,7 @@ async def staff_rep_final(call: CallbackQuery):
         res = conn.execute('SELECT item_name, SUM(eaten), SUM(defect), SUM(expired) FROM staff_consumption WHERE date = ? GROUP BY item_name', (date,)).fetchall()
     rep = f"🍽 **ОТЧЕТ ЦЕХ: {date}**\n\n"
     for r in res:
-        rep += f"🔸 **{r[0]}**\n    └ Кассиры: {r[1]} | Брак: {r[2]} | Срок: {r[3]}\n"
+        rep += f"🔸 **{r[0]}**\n   └ Кассиры: {r[1]} | Брак: {r[2]} | Срок: {r[3]}\n"
     await call.message.edit_text(rep or "Нет данных", reply_markup=ikb_back_only(), parse_mode="Markdown")
     await call.answer()
 
